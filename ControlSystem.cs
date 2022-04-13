@@ -14,19 +14,7 @@ namespace TestSharpPro
 {
     public class ControlSystem : CrestronControlSystem
     {
-        /// <summary>
-        /// ControlSystem Constructor. Starting point for the SIMPL#Pro program.
-        /// Use the constructor to:
-        /// * Initialize the maximum number of threads (max = 400)
-        /// * Register devices
-        /// * Register event handlers
-        /// * Add Console Commands
-        /// 
-        /// Please be aware that the constructor needs to exit quickly; if it doesn't
-        /// exit in time, the SIMPL#Pro program will exit.
-        /// 
-        /// You cannot send / receive data in the constructor
-        /// </summary>
+        private GenericComponent levelGetter, levelGetter2;
         public ControlSystem()
             : base()
         {
@@ -40,19 +28,6 @@ namespace TestSharpPro
             }
         }
 
-        /// <summary>
-        /// InitializeSystem - this method gets called after the constructor 
-        /// has finished. 
-        /// 
-        /// Use InitializeSystem to:
-        /// * Start threads
-        /// * Configure ports, such as serial and verisports
-        /// * Start and initialize socket connections
-        /// Send initial device configurations
-        /// 
-        /// Please be aware that InitializeSystem needs to exit quickly also; 
-        /// if it doesn't exit in time, the SIMPL#Pro program will exit.
-        /// </summary>
         public override void InitializeSystem()
         {
             var startThread = new Thread(SystemStart, null, Thread.eThreadStartOptions.Running)
@@ -66,6 +41,7 @@ namespace TestSharpPro
         {
             try
             {
+                CrestronConsole.AddNewConsoleCommand(Dsp, "dsp", "send command", ConsoleAccessLevelEnum.AccessOperator);
                 var biamp = new BiampTesira();
                 biamp.Initialize(1);
                 biamp.OnCommunicatingChange += OnCommunicatingChange;
@@ -75,14 +51,22 @@ namespace TestSharpPro
                 CrestronConsole.PrintLine("SystemStart!");
 
                 var state1 = new StateComponent();
-                state1.Configure(1, "PGM_Spk_Level", "mute", 1, 0);
+                state1.Configure(1, "Program_Audio", "mute", 1, 0);
 
                 var state2 = new StateComponent();
-                state2.Configure(1, "Ceiling_Spk_Level", "mute", 1, 0);
+                state2.Configure(1, "Room_Audio", "mute", 1, 0);
+
+                levelGetter = new GenericComponent();
+                levelGetter2 = new GenericComponent();
+                levelGetter.Configure(1, "Program_Audio", "minLevel", 1, 0, 2, 1);
+                levelGetter2.Configure(1, "Program_Audio", "maxLevel", 1, 0, 2, 1);
 
                 state1.OnStateChange += State1OnOnStateChange;
                 state2.OnStateChange += State1OnOnStateChange;
-
+                levelGetter.OnSerialChange += LevelGetterMinOnSerialChange;
+                levelGetter.OnAnalogChangeSigned += LevelGetterOnOnAnalogChangeSigned;
+                levelGetter2.OnSerialChange += LevelGetterMaxOnSerialChange;
+                
 
             }
             catch (Exception e )
@@ -90,6 +74,27 @@ namespace TestSharpPro
                 CrestronConsole.PrintLine(e.ToString());
             }
             return null;
+        }
+
+        private void LevelGetterOnOnAnalogChangeSigned(object sender, Int16EventArgs args)
+        {
+            CrestronConsole.PrintLine("LevelGetterMinOnAnalogChange Int. args:{0}", args.Payload);
+        }
+
+        private void LevelGetterMaxOnSerialChange(object sender, StringEventArgs args)
+        {
+            CrestronConsole.PrintLine("LevelGetterMaxOnSerialChange. args:{0}", args.Payload);
+        }
+        
+        private void LevelGetterMinOnSerialChange(object sender, StringEventArgs args)
+        {
+            CrestronConsole.PrintLine("LevelGetterMinOnSerialChange. args:{0}", args.Payload);
+        }
+
+        private void Dsp(string cmdparameters)
+        {
+            if (cmdparameters.Length <= 0) return;
+            levelGetter.SetSerial(cmdparameters); // i.e. Program_Audio get minLevel 1
         }
 
         private void State1OnOnStateChange(object sender, UInt16EventArgs args)
