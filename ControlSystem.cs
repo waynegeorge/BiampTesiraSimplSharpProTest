@@ -2,6 +2,7 @@ using System;
 using BiampTesiraLib3;
 using BiampTesiraLib3.Components;
 using BiampTesiraLib3.Events;
+using BiampTesiraLib3.Tesira_Support;
 using Crestron.SimplSharp;                          	// For Basic SIMPL# Classes
 using Crestron.SimplSharpPro;                       	// For Basic SIMPL#Pro classes
 using Crestron.SimplSharpPro.CrestronThread;        	// For Threading
@@ -14,9 +15,17 @@ namespace TestSharpPro
 {
     public class ControlSystem : CrestronControlSystem
     {
+        private BiampTesira biamp;
         private GenericComponent levelGetter, levelGetter2;
         private LevelComponent level1;
-        private StateComponent _state1;
+        private StateComponent _mic1;
+        private StateComponent _mic2;
+        private StateComponent _allMics;
+        private VoipDialerComponent component1;
+        private VoipDialerComponent component2;
+        private VoipDialerStatus _status;
+        private VoipCallStatus callStatus;
+        private int initState;
 
         public ControlSystem()
             : base()
@@ -44,41 +53,39 @@ namespace TestSharpPro
         {
             try
             {
-                CrestronConsole.AddNewConsoleCommand(Poll, "poll", "send command", ConsoleAccessLevelEnum.AccessOperator);
-                var biamp = new BiampTesira();
+                CrestronConsole.AddNewConsoleCommand(Cmd, "cmd", "send command", ConsoleAccessLevelEnum.AccessOperator);
+                biamp = new BiampTesira();
                 biamp.Initialize(1);
                 biamp.OnCommunicatingChange += OnCommunicatingChange;
+                biamp.OnClientSocketStatus += BiampOnOnClientSocketStatus;
                 biamp.Configure(1, 1, "192.168.2.35", "admin", "admin");
                 biamp.Connect();
 
                 CrestronConsole.PrintLine("SystemStart");
 
-                _state1 = new StateComponent();
-                _state1.Configure(1, "Program_Audio", "mute", 1, 0);
+                component1 = new VoipDialerComponent();
+                component1.Configure(1, "VoIP_Dialler", "VoIPControlStatus1", 1);
+                component1.OnCallStatusListChange += ComponentOnOnCallStatusListChange;
+                component1.OnInitializeChange += ComponentOnOnInitializeChange;
 
-                var state2 = new StateComponent();
-                state2.Configure(1, "Room_Audio", "mute", 1, 0);
+                component2 = new VoipDialerComponent();
+                component2.Configure(1, "VoIP_Dialler", "VoIPControlStatus1", 2);
+                component2.OnCallStatusListChange += ComponentOnOnCallStatusListChange;
 
-                level1 = new LevelComponent();
-                level1.Configure(1, "Program_Audio", "level", 1, 0, 3);
+                _mic1 = new StateComponent();
+                _mic1.Configure(1, "Mic_Mutes", "mute", 1, 0);
+                _mic1.OnStateChange += OnOnStateChange;
 
-                levelGetter = new GenericComponent();
-                levelGetter.Configure(1, "Program", "mute", 1, 0, 0, 0);
-                
-                //levelGetter2 = new GenericComponent();
-                //levelGetter2.Configure(1, "Program_Audio", "maxLevel", 1, 0, 1, 0);
+                _mic2 = new StateComponent();
+                _mic2.Configure(1, "Mic_Mutes", "mute", 2, 0);
+                _mic2.OnStateChange += OnOnStateChange;
 
-                _state1.OnStateChange += State1OnOnStateChange;
-                state2.OnStateChange += State1OnOnStateChange;
-                
-                //level1.OnLevelChangeSignedUnscaled += Level1OnOnLevelChangeSignedUnscaled;
-                //level1.OnLevelTextChange += Level1OnOnLevelTextChange;
-                
-                levelGetter.OnDigitalChange += LevelGetterOnOnDigitalChange;
-                //levelGetter.OnAnalogChangeSigned += LevelGetterOnOnAnalogChangeSigned;
-                //levelGetter2.OnAnalogChangeSigned += LevelGetterOnOnAnalogChangeSigned;
-                
+                _allMics = new StateComponent();
+                _allMics.Configure(1, "All_Mics", "mute", 1, 0);
+                _allMics.OnStateChange += OnOnStateChange;
 
+                _status = new VoipDialerStatus();
+                //var t = new CTimer(Poll, null, 0, 1000);
             }
             catch (Exception e )
             {
@@ -87,74 +94,104 @@ namespace TestSharpPro
             return null;
         }
 
-        private void LevelGetterOnOnDigitalChange(object sender, UInt16EventArgs args)
+        private void OnOnStateChange(object sender, UInt16EventArgs args)
         {
-            CrestronConsole.PrintLine("LevelGetterOnOnDigitalChange. args:{0}", args.Payload);
+            var sndr = (StateComponent)sender;
+            CrestronConsole.PrintLine("Block:{2} Mic{0} {1}", sndr.ConfigInfo.Index2, args.Payload, sndr.ConfigInfo.InstanceTag);
         }
 
-        private void Level1OnOnLevelTextChange(object sender, StringEventArgs args)
+        private void BiampOnOnClientSocketStatus(object sender, UInt16EventArgs args)
         {
-            var lc = (LevelComponent)sender;
-            CrestronConsole.PrintLine("Level1OnOnLevelTextChange {0}. args:{1}", lc.ConfigInfo.InstanceTag, args.Payload);
+            CrestronConsole.PrintLine("{1}:BiampOnOnClientSocketStatus:{0}", args.Payload, DateTime.Now.ToString());
         }
 
-        private void Level1OnOnLevelChangeSignedUnscaled(object sender, Int16EventArgs args)
+        private void Poll()
         {
-            var lc = (LevelComponent)sender;
-            CrestronConsole.PrintLine("Level1OnOnLevelChangeSignedUnscaled {0}. args:{1}", lc.ConfigInfo.InstanceTag, args.Payload);
+            biamp.SendHeartbeat();
+            biamp.GetResponseTime();
         }
 
-        private void LevelGetterOnOnAnalogChangeSigned(object sender, Int16EventArgs args)
+        private void ComponentOnOnCallStatusListChange2(object sender, VoipCallStatusesEventArgs args)
         {
-            //var lc = (LevelComponent)sender;
-            CrestronConsole.PrintLine("LevelGetterMinOnAnalogChange {0}.7}", /*lc.ConfigInfo.InstanceTag, */args.Payload);
+            var status = new VoipCallStatus();
+            var statusList = args.Payload;
+            var sndr = (VoipDialerComponent)sender;
+
+            statusList.Get(1, ref status);
+            CrestronConsole.PrintLine("2 State.Number:{0}, status.ID:{1} Line:{2}", status.State.Number, status.ID, sndr.ConfigInfo.LineNumber);
         }
 
-        private void Poll(string cmdparameters)
+        private void ComponentOnOnInitializeChange(object sender, UInt16EventArgs args)
+        {
+            if (args.Payload == initState) return;
+            CrestronConsole.PrintLine("ComponentOnOnInitializeChange:{0}", args.Payload);
+            initState = args.Payload;
+        }
+
+        private void ComponentOnOnCallStatusListChange(object sender, VoipCallStatusesEventArgs args)
+        {
+            var sndr = (VoipDialerComponent)sender;
+            var status = new VoipCallStatus();
+            var statusList = args.Payload;
+
+            statusList.Get(1, ref status);
+            CrestronConsole.PrintLine("1 State.Number:{0}, status.ID:{1} Line:{2}", status.State.Number, status.ID, sndr.ConfigInfo.LineNumber);
+        }
+
+        private void Cmd(string cmdparameters)
         {
             if (cmdparameters.Length <= 0) return;
-            switch (cmdparameters)
+
+            var prms = cmdparameters.Split(' ');
+
+            switch (prms[0])
             {
-                case "min":
-                    levelGetter.Poll();
+                case "connect":
+                    biamp.Connect();
                     break;
-                case "max":
-                    levelGetter2.Poll();
+                case ("poll"):
+                    Poll();
                     break;
-                case "level":
-                    level1.Poll();
+                case ("dial1"):
+                    component1.CallSelect(1);
+                    component1.Dial(prms[1]);
                     break;
-                case "levels":
-                    level1.PollState();
+                case ("dial2"):
+                    component1.CallSelect(2);
+                    component1.Dial(prms[1]);
                     break;
-                case "state":
-                    levelGetter.Poll();
+                case ("endcall1"):
+                    component1.End_Call(1);
                     break;
+                case ("endcall2"):
+                    component1.End_Call(2);
+                    break;
+                case ("endall"):
+                    component1.End_All();
+                    break;
+                case ("end"):
+                    component1.End();
+                    break;
+                case ("on"):
+                    component1.OnHook();
+                    break;
+                case ("off"):
+                    component1.OffHook();
+                    break;
+                case ("help"):
+                    component1.SelectSpeedDialEntry(1);
+                    component1.DialSpeedDialEntry();
+                    break;
+                case ("mute1"):
                 default:
                     CrestronConsole.PrintLine("Invalid args");
                     break;
             }
         }
 
-        private void State1OnOnStateChange(object sender, UInt16EventArgs args)
-        {
-            try
-            {
-                CrestronConsole.PrintLine("State1OnOnStateChange. args:{0}", args.Payload);
-
-                var sc = (StateComponent)sender;
-
-                CrestronConsole.PrintLine("State1OnOnStateChange.  {0}", sc.ConfigInfo.InstanceTag);
-            }
-            catch(Exception e)
-            {
-                CrestronConsole.PrintLine(e.ToString());
-            }
-        }
-
         private void OnCommunicatingChange(object sender, UInt16EventArgs args)
         {
-            CrestronConsole.PrintLine("Biamp Communicating! object is {0}", sender.ToString());
+            CrestronConsole.PrintLine("Biamp Comms! args:{0}", args.Payload);
         }
     }
 }
